@@ -74,6 +74,10 @@ namespace ihoseco
                 string liffoffsensor = $"command=sensorofflist&lineid={sourceid}&linetype={linetype}";
                 quickReply.Items.Add(new QuickReplyButtonObject(
                     new PostbackTemplateAction("センサー解除", liffoffsensor, "センサー解除", true)));
+                //窓飛HP
+                quickReply.Items.Add(new QuickReplyButtonObject(
+                                new UriTemplateAction("窓飛HP", "https://www.sohi.co.jp/index.html"), null));
+
                 ISendMessage replySendMessage = new TextMessage("センサーの登録、解除", quickReply);
                 await messagingClient.ReplyMessageAsync(replyToken, new List<ISendMessage> { replySendMessage });
                 return;
