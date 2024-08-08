@@ -7,6 +7,7 @@ using Line.Messaging;
 using Line.Messaging.Webhooks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using static Google.Protobuf.WireFormat;
 
 namespace ihoseco
 {
@@ -30,6 +31,8 @@ namespace ihoseco
             if (ev.Message.Type == EventMessageType.Text)
             {
                 Log.LogInformation($"Text={((TextEventMessage)ev.Message).Text}");
+                string linetype = ev.Source.Type.ToString();
+                await HandleTextAsync(ev.ReplyToken, ((TextEventMessage)ev.Message).Text, ev.Source.Id, linetype);
             }
         }
         protected override async Task OnFollowAsync(FollowEvent ev)
@@ -50,6 +53,32 @@ namespace ihoseco
         protected override async Task OnLeaveAsync(LeaveEvent ev)
         {
             Log.LogInformation($"OnLeaveAsync SourceType:{ev.Source.Type}, SourceId:{ev.Source.Id}");
+        }
+        private async Task HandleTextAsync(string replyToken, string userMessage, string sourceid, string linetype)
+        {
+            var replyMessage = new TextMessage($"You said: {userMessage}");
+            var quickReply = new QuickReply();
+            if (userMessage == "こんにちは")
+            {
+                replyMessage.Text = "本当に暑いですね";
+            }
+            else if (userMessage == "1" || userMessage == "１")
+            {
+                quickReply.Items.Add(new QuickReplyButtonObject(
+                    new PostbackTemplateAction("中止", "deviceid=dummy&action=cancel&id=000", "中止", true)));
+                //センサー登録
+                string liffsensoronurl = $"command=sensoronlist&lineid={sourceid}&linetype={linetype}";
+                quickReply.Items.Add(new QuickReplyButtonObject(
+                    new PostbackTemplateAction("センサー登録", liffsensoronurl, "センサー登録", true)));
+                //センサー解除
+                string liffoffsensor = $"command=sensorofflist&lineid={sourceid}&linetype={linetype}";
+                quickReply.Items.Add(new QuickReplyButtonObject(
+                    new PostbackTemplateAction("センサー解除", liffoffsensor, "センサー解除", true)));
+                ISendMessage replySendMessage = new TextMessage("センサーの登録、解除", quickReply);
+                await messagingClient.ReplyMessageAsync(replyToken, new List<ISendMessage> { replySendMessage });
+                return;
+            }
+            await messagingClient.ReplyMessageAsync(replyToken, new List<ISendMessage> { replyMessage });
         }
     }
 }
