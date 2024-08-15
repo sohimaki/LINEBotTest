@@ -5,10 +5,128 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using System.Net;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace LINEBotTest
 {
+    public static class WebhookRequestMessageHelper
+    {
+        /// <summary>
+        /// Verify if the request is valid, then returns LINE Webhook events from the request
+        /// </summary>
+        /// <param name="request">HttpRequest</param>
+        /// <param name="channelSecret">ChannelSecret</param>
+        /// <param name="botUserId">BotUserId</param>
+        /// <returns>List of WebhookEvent</returns>
+        public static async Task<IEnumerable<WebhookEvent>> GetWebhookEventsAsync(this HttpRequest request, string channelSecret, string? botUserId = null)
+        {
+            if (request is null) { throw new ArgumentNullException(nameof(request)); }
+            if (channelSecret is null) { throw new ArgumentNullException(nameof(channelSecret)); }
+
+            // Read the request body
+            string content;
+            using (var reader = new StreamReader(request.Body, Encoding.UTF8))
+            {
+                content = await reader.ReadToEndAsync();
+            }
+
+            var xLineSignature = request.Headers["x-line-signature"].FirstOrDefault();
+            if (string.IsNullOrEmpty(xLineSignature) || !VerifySignature(channelSecret, xLineSignature, content))
+            {
+                throw new InvalidSignatureException("Signature validation failed.");
+            }
+
+            dynamic json = JsonConvert.DeserializeObject(content);
+
+            if (!string.IsNullOrEmpty(botUserId))
+            {
+                if (botUserId != (string)json.destination)
+                {
+                    throw new UserIdMismatchException("Bot user ID does not match.");
+                }
+            }
+            return WebhookEventParser.ParseEvents(json.events);
+        }
+        /// <summary>
+        /// Verify if the request is valid, then returns LINE Webhook events from the request
+        /// </summary>
+        /// <param name="request">HttpRequestMessage</param>
+        /// <param name="channelSecret">ChannelSecret</param>
+        /// <param name="botUserId">BotUserId</param>
+        /// <returns>List of WebhookEvent</returns>
+        public static async Task<IEnumerable<WebhookEvent>> GetWebhookEventsAsync(this HttpRequestMessage request, string channelSecret, string? botUserId = null)
+        {
+            if (request is null) { throw new ArgumentNullException(nameof(request)); }
+            if (channelSecret is null) { throw new ArgumentNullException(nameof(channelSecret)); }
+
+            var content = await request.Content.ReadAsStringAsync();
+
+            var xLineSignature = request.Headers.GetValues("x-line-signature").FirstOrDefault();
+            if (string.IsNullOrEmpty(xLineSignature) || !VerifySignature(channelSecret, xLineSignature, content))
+            {
+                throw new InvalidSignatureException("Signature validation faild.");
+            }
+
+            dynamic json = JsonConvert.DeserializeObject(content);
+
+            if (!string.IsNullOrEmpty(botUserId))
+            {
+                if (botUserId != (string)json.destination)
+                {
+                    throw new UserIdMismatchException("Bot user ID does not match.");
+                }
+            }
+            return WebhookEventParser.ParseEvents(json.events);
+        }
+
+        /// <summary>
+        /// The signature in the X-Line-Signature request header must be verified to confirm that the request was sent from the LINE Platform.
+        /// Authentication is performed as follows.
+        /// 1. With the channel secret as the secret key, your application retrieves the digest value in the request body created using the HMAC-SHA256 algorithm.
+        /// 2. The server confirms that the signature in the request header matches the digest value which is Base64 encoded
+        /// https://developers.line.biz/en/reference/messaging-api/#signature-validation
+        /// https://developers.line.biz/ja/reference/messaging-api/#signature-validation
+        /// </summary>
+        /// <param name="channelSecret">ChannelSecret</param>
+        /// <param name="xLineSignature">X-Line-Signature header</param>
+        /// <param name="requestBody">RequestBody</param>
+        /// <returns></returns>
+        internal static bool VerifySignature(string channelSecret, string xLineSignature, string requestBody)
+        {
+            try
+            {
+                var key = Encoding.UTF8.GetBytes(channelSecret);
+                var body = Encoding.UTF8.GetBytes(requestBody);
+
+                using HMACSHA256 hmac = new(key);
+                var hash = hmac.ComputeHash(body, 0, body.Length);
+                var xLineBytes = Convert.FromBase64String(xLineSignature);
+                return SlowEquals(xLineBytes, hash);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Compares two-byte arrays in length-constant time. 
+        /// This comparison method is used so that password hashes cannot be extracted from on-line systems using a timing attack and then attacked off-line.
+        /// <para> http://bryanavery.co.uk/cryptography-net-avoiding-timing-attack/#comment-85　</para>
+        /// </summary>
+        private static bool SlowEquals(byte[] a, byte[] b)
+        {
+            uint diff = (uint)a.Length ^ (uint)b.Length;
+            for (int i = 0; i < a.Length && i < b.Length; i++)
+                diff |= (uint)(a[i] ^ b[i]);
+            return diff == 0;
+        }
+    }
+
     public class MessagingHookFunction
     {
         private readonly ILogger<MessagingHookFunction> log;
@@ -32,13 +150,7 @@ namespace LINEBotTest
             string secret = GetEnvironmentVariable("LINEAPI_CHANNELSECRET");
             log.LogInformation($"token={token} secret={secret}");
 
-            //以下のコメントアウトは拡張メソッドを使って、HttpRequestをHttpRequestMessageに変換してからGetWebhookEventsAsyncを呼び出す方法
-            var reqmsg = await req.ToHttpRequestMessageAsync();
-            log.LogInformation($"End HttpRequest to HttpRequestMessage");
-
-            var events = await reqmsg.GetWebhookEventsAsync(GetEnvironmentVariable("LINEAPI_CHANNELSECRET"));
-
-            log.LogInformation($"End reqmsg.GetWebhookEventsAsync");
+            var events = await req.GetWebhookEventsAsync(GetEnvironmentVariable("LINEAPI_CHANNELSECRET"));
 
             var app = new LineBotApp(lineMessagingClient, log);
 
@@ -55,45 +167,6 @@ namespace LINEBotTest
                 return defaultvalue;
             }
             return env_value;
-        }
-    }
-    public static class HttpRequestExtensions
-    {
-        public static async Task<HttpRequestMessage> ToHttpRequestMessageAsync(this HttpRequest request)
-        {
-            var requestMessage = new HttpRequestMessage
-            {
-                Method = new HttpMethod(request.Method),
-                RequestUri = new Uri($"{request.Scheme}://{request.Host}{request.Path}{request.QueryString}")
-            };
-
-            // ヘッダーのコピー
-            foreach (var header in request.Headers)
-            {
-                requestMessage.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
-            }
-
-            // ボディのコピー
-            if (request.ContentLength > 0 || request.Headers.ContainsKey("Transfer-Encoding"))
-            {
-                request.EnableBuffering();
-                var streamContent = new StreamContent(request.Body);
-                requestMessage.Content = streamContent;
-
-                // ストリームの位置をリセット
-                request.Body.Position = 0;
-
-                // Contentヘッダーのコピー
-                foreach (var header in request.Headers)
-                {
-                    if (header.Key.StartsWith("Content-", StringComparison.OrdinalIgnoreCase))
-                    {
-                        requestMessage.Content.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
-                    }
-                }
-            }
-
-            return requestMessage;
         }
     }
 }
