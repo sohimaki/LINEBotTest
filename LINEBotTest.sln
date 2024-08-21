@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.9.34701.34
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LINEBotTest", "LINEBotTest\LINEBotTest.csproj", "{F8EC04B0-EB43-4FCE-B332-214309FD72A6}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LINEBotTest", "LINEBotTest\LINEBotTest.csproj", "{F8EC04B0-EB43-4FCE-B332-214309FD72A6}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Line.Messaging", "Line.Messaging\Line.Messaging.csproj", "{ECF05AF8-93B1-4AF9-880B-B72A020A0478}"
 EndProject
