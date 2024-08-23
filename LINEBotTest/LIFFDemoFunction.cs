@@ -5,6 +5,10 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Microsoft.Azure.Cosmos;
 using System.ComponentModel;
+using static Azure.Core.HttpHeader;
+using ihoseco;
+using System;
+using TimeZoneConverter;
 
 namespace LINEBotTest
 {
@@ -39,35 +43,146 @@ namespace LINEBotTest
         {
             _logger = logger;
         }
+        public List<string> SplitCsvString(string csv)
+        {
+            if (string.IsNullOrEmpty(csv))
+            {
+                return new List<string>();
+            }
 
+            // カンマで分割してList<string>に変換
+            List<string> result = new List<string>(csv.Split(','));
+
+            // 各要素の前後の空白をトリム
+            for (int i = 0; i < result.Count; i++)
+            {
+                result[i] = result[i].Trim();
+            }
+
+            return result;
+        }
+        public int GetVoltStatus(int lastvolt)
+        {
+            int voltstatus = -1;
+            if (lastvolt >= 29 && lastvolt <= 31)
+            {
+                voltstatus = 0;
+            }
+            else if (lastvolt >= 26 && lastvolt <= 28)
+            {
+                voltstatus = 1;
+            }
+            else if (lastvolt >= 22 && lastvolt <= 25)
+            {
+                voltstatus = 2;
+            }
+            else
+            {
+                voltstatus = 3;
+            }
+            return voltstatus;
+        }
+        public int IsWithin24Hours(DateTime acceldateTime, DateTime dateTimenow)
+        {
+            TimeSpan timeDifference = dateTimenow - acceldateTime;
+            return timeDifference.TotalHours <= 24 ? 1 : 0;
+        }
+        public int GetHeartbeatStatus(DateTime heartbeattime, DateTime dateTimenow)
+        {
+            DateTime lastheartbeatdatetime = heartbeattime;
+
+            if (dateTimenow > lastheartbeatdatetime)
+            {
+                TimeSpan timeDifference = dateTimenow - lastheartbeatdatetime;
+                double hoursDifference = timeDifference.TotalHours;
+
+                if (hoursDifference < 36)
+                {
+                    return 0;
+                }
+                if (hoursDifference < 60)
+                {
+                    return 1;
+                }
+                if (hoursDifference < 84)
+                {
+                    return 2;
+                }
+                return -1;
+            }
+            return 0;
+        }
         [Function("LIFFDemoFunction")]
-        public IActionResult Run([HttpTrigger(AuthorizationLevel.Anonymous, "get", "post")] HttpRequest req)
+        public async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Anonymous, "get", "post")] HttpRequest req)
         {
             _logger.LogInformation("************************** LIFFDemoFunction. **********************");
 
-            List<EventListItemEx> demoEventList = new List<EventListItemEx>();
+            string responseMessage = string.Empty;
+            //string csv = req.Query["sensor"];
+            string csv = "26F5A06,26F5A07,26F5A10,26F5A16";
+            List<string> sensorIds = SplitCsvString(csv);
 
-            // ダミーデータの作成
-            for (int i = 1; i <= 12; i++)
+            DateTime dateTimenow = Utility.GetJapanseseNow();
+
+            var query = $"SELECT c.id, c.sensorid, c.isAccelNotifyOff, c.lastaccelerometerdatetime, c.lastpatroldatetime, c.lastheartbeatdatetime, c.sensorname, c.lastvolt, c.expiredate, c.pictureurl, c.address, c.sensortype, c.longitude, c.latitude, c.picturefilename, c.picturethumbnailfilename  FROM c WHERE c.id IN ({string.Join(", ", sensorIds.Select(id => $"'{id}'"))})";
+            query += " ORDER BY c.lastaccelerometerdatetime DESC";
+
+            try
             {
-                demoEventList.Add(new EventListItemEx
-                {
-                    no = i,
-                    sensorid = $"Sensor_{i}",
-                    // voltstatusは0～3の値をランダムに設定
-                    voltstatus = i % 4, // 0, 1, 2, 3のいずれか
-                    // lastaccelstatusは0または1の値をランダムに設定
-                    lastaccelstatus = i % 2, // 0, 1のいずれか
-                    // lastheartbeatstatusは0～2の値をランダムに設定
-                    lastheartbeatstatus = i % 3, // 0, 1, 2のいずれか
-                    caption = $"Sensor Name {i}",
-                    isAccelNotifyOff = false
-                });
-            }
 
-            // レスポンスをJSONにシリアライズして返す
-            string responseMessage = JsonConvert.SerializeObject(demoEventList);
-            return new OkObjectResult(responseMessage);
+                List<SensorMasterEx> items = await GetItemListFromContainerAsync<SensorMasterEx>(query);
+
+                List<EventListItemEx> demoEventList = new List<EventListItemEx>();
+                int no = 0;
+                foreach (SensorMasterEx sm in items)
+                {
+                    DateTime lastaccelerometerdatetime = sm.lastaccelerometerdatetime;
+                    string sensorid = sm.sensorid;
+                    DateTime lastpatroldatetime = sm.lastpatroldatetime;
+                    DateTime lastheartbeatdatetime = sm.lastheartbeatdatetime;
+                    DateTime expiredate = sm.expiredate;
+                    string sensorname = sm.sensorname;
+                    int lastvolt = sm.lastvolt;
+
+                    no++;
+                    EventListItemEx sl = new EventListItemEx();
+                    sl.no = no;
+                    sl.sensorid = sensorid;
+                    sl.voltstatus = GetVoltStatus(sm.lastvolt);
+                    sl.lastaccelstatus = IsWithin24Hours(sm.lastaccelerometerdatetime, dateTimenow);
+                    sl.lastheartbeatstatus = GetHeartbeatStatus(sm.lastheartbeatdatetime, dateTimenow);
+                    sl.caption = sensorname;
+                    sl.isAccelNotifyOff = sm.isAccelNotifyOff;
+                    demoEventList.Add(sl);
+                }
+
+                // ダミーデータの作成
+                //for (int i = 1; i <= 12; i++)
+                //{
+                //    demoEventList.Add(new EventListItemEx
+                //    {
+                //        no = i,
+                //        sensorid = $"Sensor_{i}",
+                //        // voltstatusは0～3の値をランダムに設定
+                //        voltstatus = i % 4, // 0, 1, 2, 3のいずれか
+                //        // lastaccelstatusは0または1の値をランダムに設定
+                //        lastaccelstatus = i % 2, // 0, 1のいずれか
+                //        // lastheartbeatstatusは0～2の値をランダムに設定
+                //        lastheartbeatstatus = i % 3, // 0, 1, 2のいずれか
+                //        caption = $"Sensor Name {i}",
+                //        isAccelNotifyOff = false
+                //    });
+                //}
+
+                // レスポンスをJSONにシリアライズして返す
+                responseMessage = JsonConvert.SerializeObject(demoEventList);
+                return new OkObjectResult(responseMessage);
+            }
+            catch (InvalidOperationException e)
+            {
+                _logger.LogError(e.Message);
+            }
+            return new BadRequestObjectResult(responseMessage);
         }
         public static string GetEnvironmentVariable(string key, string defaultvalue = null)
         {
